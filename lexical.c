@@ -2,10 +2,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include <ctype.h>
+
 
 #define MAX_LEXEME_LENGTH 256
 #define KEYWORD_COUNT 16 // Total number of keywords; can be made dynamic if needed
+
+//input classification functions (renamed to avoid clashing with libc)
+static bool is_alpha(char input){
+    return (input >= 'a' && input <= 'z' || (input >= 'A' && input <= 'Z'));
+}
+static bool is_digit(char input){
+    return (input >= '0' && input <= '9');
+}
+static bool is_space(char input){
+    return input == ' '  || 
+           input == '\t' || 
+           input == '\n'; 
+}
+static bool is_alphanumeric(char input){
+    return (is_alpha(input) || is_digit(input));
+}
 
 // Token Type Enumeration
 typedef enum {
@@ -17,7 +33,8 @@ typedef enum {
     Token_CodeEnd,
     Token_Unknown,
     Token_Delimeter,
-    Token_Comment,
+    Token_Single_Line_Comment,
+    Token_Block_Comment,
     Token_Arithmetic_Operator,
     Token_Boolean_Operator,
     Token_Assignment_Operator,
@@ -84,9 +101,477 @@ Keyword keywords[] = {
 };
 
 // Function Prototypes
-Token getNextToken(FILE* srcFile);
 Token_Type getlexemeType(const char* lexeme);
-void outputToken(Token token);
+
+//Helper Functions for getNextToken
+const char *inputStream;
+int streamIndex = 0;
+int currentLine = 1;
+
+char peekChar(){
+    if (!inputStream) return '\0';
+    char c = inputStream[streamIndex];
+    if (c == '\0') return '\0';
+    return c;
+}
+
+char getChar() {
+    if (!inputStream) return '\0';
+    char c = inputStream[streamIndex];
+    if (c == '\0') return '\0';
+    streamIndex++;
+    if (c == '\n') {
+        currentLine++;
+    }
+    return c;
+}
+Token createToken(Token_Type type, const char* lexemeStart, int len) {
+    Token token;
+    token.type = type;
+    token.line_number = currentLine;
+    strncpy(token.lexeme, lexemeStart, len);
+    token.lexeme[len] = '\0'; 
+    return token;
+}
+//Helper Functions for getNextToken
+
+//Automaton States
+typedef enum{
+    STATE_START,
+    STATE_IN_IDENTIFIER,
+    STATE_IN_NUMBER,
+    STATE_IN_CHAR,
+    STATE_IN_CHAR_EXPECT_CLOSE,
+    STATE_IN_CHAR_ESCAPE,
+    STATE_IN_STRING,
+    STATE_IN_STRING_ESCAPE,
+    STATE_IN_TILDE,
+    STATE_IN_SINGLE_LINE_COMMENT,
+    STATE_IN_BLOCK_COMMENT,
+    STATE_IN_BLOCK_COMMENT_TILDE,
+    //special states for DIV operator
+    STATE_IN_D_DIV,
+    STATE_IN_I,
+    STATE_IN_V,
+    //special states for or operator
+    STATE_IN_O,
+    STATE_IN_R,
+    //special states for and operator
+    STATE_IN_A,
+    STATE_IN_N,
+    STATE_IN_D_AND,
+    //special states for = and == 
+    STATE_IN_EQUAL,
+    STATE_DONE,
+}AutomatonState;
+//Automaton States
+
+//getNextToken Function
+Token getNextToken(){
+    AutomatonState currentState = STATE_START;
+    char lexemeBuffer[MAX_LEXEME_LENGTH];
+    int lexemeIndex = 0;
+    char currentChar;
+
+    while(currentState != STATE_DONE){
+        currentChar = peekChar();
+
+        switch(currentState){
+            case STATE_START:
+                if(is_space(currentChar)){
+                    getChar();
+                }
+                else if(strchr("()[]{},", currentChar)){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Delimeter, lexemeBuffer, lexemeIndex);
+                }
+                else if(strchr("+-*%/^", currentChar)){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Arithmetic_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else if(currentChar == 'D'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_D_DIV;
+                }
+                else if(currentChar == 'o'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_O;
+                }
+                else if(currentChar == 'a'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_A;
+                }
+                else if(is_alpha(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else if(is_digit(currentChar)){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_NUMBER;
+                }
+                else if(currentChar == '\''){
+                    getChar();
+                    currentState = STATE_IN_CHAR;
+                }
+                else if(currentChar == '\"'){
+                    getChar();
+                    currentState = STATE_IN_STRING;
+                }
+                else if(currentChar == '~' ){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_TILDE;
+                }
+                else if(currentChar == '='){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_EQUAL;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_IDENTIFIER:
+                if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                }
+                else{
+                    currentState = STATE_DONE;
+                    // Change "Token_Identifier" with lookup table function call
+                    Token_Type finalType = Token_Identifier;
+                    return createToken(finalType, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_NUMBER:
+                if(is_digit(currentChar)) {
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                }
+                else{
+                    currentState = STATE_DONE;
+                    return createToken(Token_Number, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_CHAR:
+                if(currentChar == '\\'){
+                    getChar();
+                    currentState = STATE_IN_CHAR_ESCAPE;
+                }
+                else if(currentChar =='\n'|| currentChar == '\0'){ //UNCLOSED CHAR ERROR
+                    currentState = STATE_DONE; 
+                    return createToken(Token_Unknown, "Unclosed Char", 13);
+                }
+                else if(currentChar == '\''){
+                    getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, "Empty char literal", 18);
+                }
+                else{
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_CHAR_EXPECT_CLOSE;
+                }
+
+                break;
+
+            case STATE_IN_CHAR_EXPECT_CLOSE:
+                if(currentChar == '\'') {
+                    getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Character, lexemeBuffer, lexemeIndex);
+                }
+                else{
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, "Multi-character literal", 22);
+                }
+                break;
+
+            case STATE_IN_CHAR_ESCAPE:
+                switch (currentChar) {
+                    case 'n': 
+                        lexemeBuffer[lexemeIndex++] = '\n'; 
+                        getChar(); 
+                        break;
+                    case 't': 
+                        lexemeBuffer[lexemeIndex++] = '\t'; 
+                        getChar(); 
+                        break;
+                    case '\'': 
+                        lexemeBuffer[lexemeIndex++] = '\''; 
+                        getChar(); 
+                        break;
+                    case '\\': 
+                        lexemeBuffer[lexemeIndex++] = '\\'; 
+                        getChar(); 
+                        break;
+                    default:
+                        currentState = STATE_DONE;
+                        return createToken(Token_Unknown, "Invalid escape sequence", 23);
+                }
+                currentState = STATE_IN_CHAR_EXPECT_CLOSE; 
+                break;
+
+            case STATE_IN_STRING:
+                if(currentChar == '\\'){
+                    getChar();
+                    currentState = STATE_IN_STRING_ESCAPE;
+                }
+                else if(currentChar == '\"'){
+                    getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_String, lexemeBuffer, lexemeIndex);
+                }
+                else if(currentChar =='\n'|| currentChar == '\0'){ //UNCLOSED STRING ERROR
+                    currentState = STATE_DONE; 
+                    return createToken(Token_Unknown, "Unclosed String", 15);
+                }
+                else{
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                }
+                break;
+            
+            case STATE_IN_STRING_ESCAPE:
+                switch (currentChar) {
+                    case 'n':
+                        lexemeBuffer[lexemeIndex++] = '\n'; 
+                        getChar(); 
+                        break;
+                    case 't':
+                        lexemeBuffer[lexemeIndex++] = '\t'; 
+                        getChar(); // 
+                        break;
+                    case '\"':
+                        lexemeBuffer[lexemeIndex++] = '\"'; 
+                        getChar(); // Consume the '"'
+                        break;
+                    case '\\':
+                        lexemeBuffer[lexemeIndex++] = '\\'; 
+                        getChar(); //
+                        break;
+                    default:
+                        currentState = STATE_DONE;
+                        return createToken(Token_Unknown, "Invalid escape sequence", 23);
+                }
+                currentState = STATE_IN_STRING;
+                break;  
+
+            case STATE_IN_D_DIV:
+                if(currentChar == 'I'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_I;
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_TILDE:
+                if(currentChar == '/'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_BLOCK_COMMENT;
+                }
+                else{
+                    currentState = STATE_IN_SINGLE_LINE_COMMENT;
+                }
+                break;
+            
+            case STATE_IN_SINGLE_LINE_COMMENT:
+                if (currentChar == '\n' || currentChar == '\0') {
+                    currentState = STATE_DONE;
+                    return createToken(Token_Single_Line_Comment, lexemeBuffer, lexemeIndex);
+                }
+                else {
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                }
+                break;
+
+            case STATE_IN_BLOCK_COMMENT:
+                if(currentChar == '/') {
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_BLOCK_COMMENT_TILDE;
+                }
+                else if (currentChar == '\0') {
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, "Unclosed block comment", 22);
+                }
+                else {
+                    lexemeBuffer[lexemeIndex++] = getChar();
+    
+                }
+                break;
+                
+            case STATE_IN_BLOCK_COMMENT_TILDE:
+                if (currentChar == '~') {
+                    lexemeBuffer[lexemeIndex++] = getChar(); 
+                    currentState = STATE_DONE;
+                    return createToken(Token_Block_Comment, lexemeBuffer, lexemeIndex);
+                }
+                else if (currentChar == '\0') {
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, "Unclosed block comment", 22);
+                }
+                else {
+                    currentState = STATE_IN_BLOCK_COMMENT;
+                }
+                break;
+                
+            case STATE_IN_I:
+                if(currentChar == 'V'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_V;
+                    
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_V:
+                if(is_space(currentChar)){ 
+                    currentState = STATE_DONE;
+                    return createToken(Token_Arithmetic_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{ 
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+                
+            case STATE_IN_O:
+                if(currentChar == 'r'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_R;
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+            
+            case STATE_IN_R:
+                if(is_space(currentChar)){ 
+                    currentState = STATE_DONE;
+                    return createToken(Token_Boolean_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{ 
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+
+            case STATE_IN_A:
+                if(currentChar == 'n'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_N;
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+
+            case STATE_IN_N:
+                if(currentChar == 'd'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_D_AND;
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+
+            case STATE_IN_D_AND:
+                if(is_space(currentChar)){
+                    currentState = STATE_DONE;
+                    return createToken(Token_Boolean_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else if(is_alphanumeric(currentChar) || currentChar == '_'){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_IN_IDENTIFIER;
+                }
+                else{ 
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+
+            case STATE_IN_EQUAL:
+                if(is_space(currentChar)){
+                    currentState = STATE_DONE;
+                    return createToken(Token_Assignment_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else if(currentChar == '='){
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Boolean_Operator, lexemeBuffer, lexemeIndex);
+                }
+                else{ 
+                    //unkown
+                    lexemeBuffer[lexemeIndex++] = getChar();
+                    currentState = STATE_DONE;
+                    return createToken(Token_Unknown, lexemeBuffer, lexemeIndex);
+                }
+                break;
+
+            case STATE_DONE:
+                break;
+
+        }
+    }
+    return createToken(Token_CodeEnd, "EOF", 3);
+}
+//getNextToken Function
 
 int main(){
     printf("Hello, world!\n");
