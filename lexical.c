@@ -7,6 +7,24 @@
 #define MAX_LEXEME_LENGTH 256
 #define KEYWORD_COUNT 16 // Total number of keywords; can be made dynamic if needed
 
+//input classification functions
+static bool isalpha(char input){
+    return (input >= 'a' && input <= 'z' || (input >= 'A' && input <= 'Z'));
+}
+static bool isdigit(char input){
+    return (input >= '0' && input <= '9');
+}
+static bool isspace(char input){
+    return input == ' '  || // Space
+           input == '\t'; // Horizontal tab
+}
+static bool isalphanumeric(char input){
+    return (isalpha(input) || isdigit(input));
+}
+static bool isescapesequence(char input){
+    return (input == 'n' || input =='t' || input == '\\');
+}
+
 // Token Type Enumeration
 typedef enum {
     Token_Identifier,
@@ -85,6 +103,8 @@ Keyword keywords[] = {
 Token getNextToken(FILE* srcFile);
 Token_Type getlexemeType(const char* lexeme);
 void outputToken(Token token);
+
+
 
 int main(){
     printf("Hello, world!\n");
