@@ -92,3 +92,101 @@ int main(){
     printf("Hello, world!\n");
     return 0;
 }
+
+Token getNextToken(FILE* srcFile){
+    Token token;
+    int state = 0; // Start state
+    char ch; // Current character
+    int lexemeIndex = 0; // Index for lexeme
+    token.line_number = 1; // Initialize line number
+    memset(token.lexeme, 0, MAX_LEXEME_LENGTH); // Clear lexeme buffer
+
+    while((ch = fgetc(srcFile)) != EOF){
+        switch(state){
+            case 0: // Start state
+                if(isspace(ch)){
+                    if(ch == '\n') token.line_number++;
+                    continue; // Ignore whitespace
+                }
+                else token.lexeme[lexemeIndex++] = ch; // Add character to lexeme
+
+                if(isalpha(ch) || ch == '_') state = 1; // Identifier state
+                else if(isdigit(ch)) state = 2; // Number state
+                else if(ch == '~') state = 3; // Comment state
+                else if(ch == '"') state = 4; // String state
+                else if(ch == '\'') state = 5; // Character state
+                //else if(strchr("+-*=%!<>", ch)) state = 6; // Operator state
+                else if(strchr("(){}[],.;", ch)) state = 7; // Delimeter state
+                else {
+                    token.lexeme[lexemeIndex] = '\0';
+                    token.type = getlexemeType(token.lexeme);
+                    return token; // Return single character tokens
+                }
+                break;
+
+            case 1: // Identifier state
+                if(isalnum(ch) || ch == '_'){
+                    token.lexeme[lexemeIndex++] = ch;
+                } else {
+                    ungetc(ch, srcFile); // Put back the non-identifier character
+                    token.lexeme[lexemeIndex] = '\0';
+                    token.type = getlexemeType(token.lexeme);
+                    return token;
+                }
+                break;
+
+            case 2: // Number state
+                if(isdigit(ch) || ch == '.') token.lexeme[lexemeIndex++] = ch;
+                else { // Not a number character
+                    ungetc(ch, srcFile); // Put back the non-number character
+                    token.lexeme[lexemeIndex] = '\0';
+                    token.type = Token_Number;
+                    return token;
+                }
+                break;
+            
+            case 3: // Comment state (not implemented)
+                // Handle comments  here
+                break;
+
+            case 4: // String state (not implemented)
+                if(ch != '"'){
+                    token.lexeme[lexemeIndex++] = ch; // Add character to string
+                } 
+                else { // End of string
+                    token.lexeme[lexemeIndex] = '\0';
+                    token.type = Token_String;
+                    return token;
+                }
+                break;
+
+            case 5: // Character state (not implemented)
+                if(ch != '\''){
+                    token.lexeme[lexemeIndex++] = ch; // Add character to char
+                } 
+                else { // End of character
+                    token.lexeme[lexemeIndex] = '\0';
+                    token.type = Token_Character;
+                    return token;
+                }
+                break;
+
+            case 6: // Operator state (not implemented)
+                // Handle multi-character operators here
+                break;
+
+            case 7: // Delimeter state (not implemented)
+                // Handle delimeters here
+                break;
+
+            case 8: // End of file state
+                token.type = Token_CodeEnd;
+                return token;
+            
+            default:
+                break;
+        }
+    }
+
+    return token;
+}
