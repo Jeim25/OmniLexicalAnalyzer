@@ -21,6 +21,7 @@ typedef enum {
     Token_Arithmetic_Operator,
     Token_Boolean_Operator,
     Token_Assignment_Operator,
+    Token_Arithmetic_Operator_DIV, 
     Token_Builtin_Constant,
     Token_Keyword_If,
     Token_Keyword_Else,
@@ -78,7 +79,8 @@ Keyword keywords[] = {
     {"true", Token_Reserved_True},
     {"false", Token_Reserved_False},
     {"null", Token_Reserved_Null},
-    {"do", Token_Noise_Do}
+    {"do", Token_Noise_Do},
+    {"DIV", Token_Arithmetic_Operator_DIV}
 };
 
 // Function Prototypes
